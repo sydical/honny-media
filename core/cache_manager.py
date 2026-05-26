@@ -25,18 +25,18 @@ class CacheManager:
     def __init__(self, db_manager=None):
         self.db = db_manager or get_db_manager()
     
-    def make_cache_key(self, workflow_type, prompt, reference_url):
+    def make_cache_key(self, workflow_type, prompt, reference_local_path=None):
         """生成缓存键"""
-        content = f"{workflow_type}:{prompt}:{reference_url}"
+        content = f"{workflow_type}:{prompt}:{reference_local_path or ''}"
         return hashlib.md5(content.encode()).hexdigest()
     
-    def get(self, workflow_type, prompt, reference_url):
+    def get(self, workflow_type, prompt, reference_local_path=None):
         """获取缓存"""
-        return self.db.get_cache(workflow_type, prompt, reference_url)
+        return self.db.get_cache(workflow_type, prompt, reference_local_path)
     
-    def set(self, workflow_type, prompt, reference_url, status='PENDING', task_id=None):
+    def set(self, workflow_type, prompt, reference_local_path=None, status='PENDING', task_id=None):
         """设置缓存"""
-        return self.db.set_cache(workflow_type, prompt, reference_url, status, task_id)
+        return self.db.set_cache(workflow_type, prompt, reference_local_path, status, task_id)
     
     def update_success(self, cache_key, result_id=None):
         """更新缓存为成功"""

@@ -18,7 +18,7 @@ from core.exif_manager import ExifManager
 
 WORKFLOW_KEYWORDS = {
     'video': ['视频', '生成视频', '做视频', '拍视频'],
-    'multiphoto': ['套装', '4图', '多图', '套图', '四图', '多张照片', '套图'],
+    'multiphoto': ['套装', '4图', '4宫格', '宫格', '多图', '套图', '四图', '多张照片', '套图'],
     'prompt_photo': ['分镜', '多场景', '多视角', 'prompt-photo'],
 }
 
@@ -78,15 +78,15 @@ class WorkflowDispatcher:
         # 2. 获取/上传参考图
         reference_url = self._get_reference_url(reference_path)
         
-        # 3. 检查缓存（只用 workflow_type + prompt，不含 reference_url）
-        cache = self.db_manager.get_cache(workflow_type, prompt)
+        # 3. 检查缓存（workflow_type + prompt + reference_local_path）
+        cache = self.db_manager.get_cache(workflow_type, prompt, reference_local_path=reference_path)
         if cache:
             result = self._handle_cache_hit(cache)
             if result:
                 return result
-        
+
         # 4. 设置缓存为 RUNNING 状态，防止并发重复提交
-        cache_key = self.db_manager.make_cache_key(workflow_type, prompt)
+        cache_key = self.db_manager.make_cache_key(workflow_type, prompt, reference_local_path=reference_path)
         
         # 5. 根据工作流类型生成分发
         if workflow_type == 'photo':
