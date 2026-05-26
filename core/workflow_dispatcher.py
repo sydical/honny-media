@@ -19,6 +19,7 @@ from core.exif_manager import ExifManager
 WORKFLOW_KEYWORDS = {
     'video': ['视频', '生成视频', '做视频', '拍视频'],
     'multiphoto': ['套装', '4图', '多图', '套图', '四图', '多张照片', '套图'],
+    'prompt_photo': ['分镜', '多场景', '多视角', 'prompt-photo'],
 }
 
 
@@ -43,6 +44,10 @@ def detect_workflow(prompt):
         if kw in prompt_lower:
             return 'multiphoto'
     
+    for kw in WORKFLOW_KEYWORDS.get('prompt_photo', []):
+        if kw in prompt_lower:
+            return 'prompt_photo'
+    
     # 默认photo
     return 'photo'
 
@@ -55,6 +60,7 @@ class WorkflowDispatcher:
         'photo': '2047002838944980993',
         'multiphoto': '2054941025688399873',
         'video': '2048133528671490050',
+        'prompt_photo': '2050291848673021954',
     }
     
     def __init__(self, api_key, db_manager):
@@ -96,6 +102,11 @@ class WorkflowDispatcher:
         elif workflow_type == 'video':
             from generators.video_generator import VideoGenerator
             generator = VideoGenerator(self.api_key, self.db_manager, self.exif_manager)
+            return generator.generate(prompt, reference_url, reference_local_path=reference_path, **kwargs)
+        
+        elif workflow_type == 'prompt_photo':
+            from generators.prompt_photo_generator import PromptPhotoGenerator
+            generator = PromptPhotoGenerator(self.api_key, self.db_manager, self.exif_manager)
             return generator.generate(prompt, reference_url, reference_local_path=reference_path, **kwargs)
         
         raise ValueError(f"未知的工作流类型: {workflow_type}")

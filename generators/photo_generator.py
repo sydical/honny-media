@@ -35,15 +35,31 @@ class PhotoGenerator:
         self.exif_manager = exif_manager
         self.client = RunningHubClient(api_key)
     
-    def generate(self, prompt, reference_url, reference_local_path=None, output_dir=None, inject_exif=True, **kwargs):
-        """生成单张图片"""
+    def generate(self, prompt, reference_url, reference_local_path=None, output_dir=None,
+                inject_exif=True, use_template=True, verbose=True, **kwargs):
+        """生成单张图片
+        
+        Args:
+            use_template: 是否使用 8 段式模板重组提示词（默认开启）
+            verbose: 是否打印格式化后的提示词（默认开启）
+        """
         from core.exif_manager import ExifManager
+        from prompts.photo_template import format_prompt
         
         if self.exif_manager is None:
             self.exif_manager = ExifManager()
         
+        # --- 8段式模板重组 ---
+        if use_template:
+            formatted = format_prompt(prompt)
+            if verbose:
+                print(f"📋 提示词已重组为 8 段式结构化格式：")
+                for line in formatted.split('\n'):
+                    print(f"   {line}")
+            prompt = formatted
+        
         print(f"🎨 开始生成 Photo...")
-        print(f"📝 提示词: {prompt[:50]}...")
+        print(f"📝 提示词: {prompt[:80]}...")
         
         # 获取数据库管理器
         if self.db_manager is None and get_db_manager:

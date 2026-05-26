@@ -33,6 +33,7 @@ from generators.multiphoto_generator import MultiPhotoGenerator
 from generators.video_generator import VideoGenerator
 from utils.runninghub import RunningHubClient
 from utils.image_utils import download_file, split_grid_image, get_image_size, get_file_size
+from core.notifier import HonnyNotifier, notify_complete
 
 # 延迟导入 PhotoToVideoPipeline（避免循环依赖）
 def _get_photo_to_video_pipeline():
@@ -77,6 +78,8 @@ class HonnyMedia:
         self.db_manager = db_manager or get_db_manager()
         self.dispatcher = WorkflowDispatcher(self.api_key, self.db_manager)
         self.exif_manager = ExifManager()
+        self.notifier = HonnyNotifier()
+        self._auto_notify = True  # 默认开启自动推送
     
     def _get_api_key(self):
         """从环境变量或配置文件获取API Key"""
@@ -93,24 +96,50 @@ class HonnyMedia:
         
         return api_key
     
-    def generate(self, prompt, reference_path=None, workflow=None, **kwargs):
+    def generate(self, prompt, reference_path=None, workflow=None, notify=False, auto_notify=False, **kwargs):
         """生成媒体内容
         
         Args:
             prompt: 提示词/描述
             reference_path: 参考图路径（可选）
             workflow: 工作流类型 ('photo', 'multiphoto', 'video', None=自动识别)
+            notify: 是否推送通知（当次生成后推送）
+            auto_notify: 是否开启自动推送（后续生成都推送）
             **kwargs: 其他参数（如 duration, inject_exif 等）
         
         Returns:
             dict: 生成结果
         """
-        return self.dispatcher.dispatch(
+        # 更新自动推送设置
+        if auto_notify:
+            self._auto_notify = True
+        
+        # 检测工作流类型
+        if workflow is None:
+            workflow_type = detect_workflow(prompt)
+        else:
+            workflow_type = workflow
+        
+        # 调用分发器生成
+        result = self.dispatcher.dispatch(
             prompt=prompt,
             reference_path=reference_path,
-            workflow_type=workflow,
+            workflow_type=workflow_type,
             **kwargs
         )
+        
+        # 添加 workflow_type 到 result（方便通知）
+        result['workflow_type'] = workflow_type
+        
+        # 推送通知
+        should_notify = notify or self._auto_notify
+        if should_notify and result.get('status') == 'success':
+            try:
+                notify_complete(result)
+            except Exception as e:
+                print(f"⚠️ 推送通知失败: {e}")
+        
+        return result
     
     def photo(self, prompt, reference_path=None, **kwargs):
         """生成单张图片"""
@@ -123,6 +152,10 @@ class HonnyMedia:
     def video(self, prompt, reference_path=None, **kwargs):
         """生成视频"""
         return self.generate(prompt, reference_path, 'video', **kwargs)
+    
+    def prompt_photo(self, prompt, reference_path=None, **kwargs):
+        """分镜生图 - 根据多段分镜提示词生成人物一致性多场景多视角图片"""
+        return self.generate(prompt, reference_path, 'prompt_photo', **kwargs)
     
     def get_stats(self, days=7):
         """获取统计信息"""

@@ -111,6 +111,37 @@ def cmd_video(args):
     return 0
 
 
+def cmd_prompt_photo(args):
+    """分镜生图命令"""
+    from honny_media import HonnyMedia
+    
+    api_key = get_api_key()
+    if not api_key:
+        print("❌ 未找到 RUNNINGHUB_API_KEY")
+        return 1
+    
+    honny = HonnyMedia()
+    
+    result = honny.prompt_photo(
+        prompt=args.prompt,
+        reference_path=args.ref,
+        output_dir=args.output,
+        grid_layout=args.layout,
+        inject_exif=not args.no_exif
+    )
+    
+    grid_path = result.get('grid_path', '')
+    session_dir = os.path.dirname(grid_path) if grid_path else 'N/A'
+    
+    print("\n✅ 分镜生图完成!")
+    print(f"📊 分镜数量: {result.get('num_shots', 0)}")
+    print(f"📁 输出目录: {session_dir}")
+    for shot in result.get('shot_paths', []):
+        print(f"  [{shot['index']}] {os.path.basename(shot['path'])}")
+    
+    return 0
+
+
 def cmd_generate(args):
     """自动识别类型生成命令"""
     from honny_media import HonnyMedia
@@ -253,6 +284,15 @@ def main():
     video_parser.add_argument('--output', help='输出目录')
     video_parser.add_argument('--duration', type=int, default=8, help='视频时长(秒)')
     video_parser.set_defaults(func=cmd_video)
+    
+    # prompt-photo 命令
+    prompt_photo_parser = subparsers.add_parser('prompt-photo', help='分镜生图-多场景多视角一致性图片')
+    prompt_photo_parser.add_argument('prompt', help='分镜提示词（多段，用换行分隔）')
+    prompt_photo_parser.add_argument('--ref', help='参考图路径')
+    prompt_photo_parser.add_argument('--output', help='输出目录')
+    prompt_photo_parser.add_argument('--layout', default='2x3', help='网格布局，如2x3表示2行3列')
+    prompt_photo_parser.add_argument('--no-exif', action='store_true', help='不注入EXIF')
+    prompt_photo_parser.set_defaults(func=cmd_prompt_photo)
     
     # generate 命令（自动识别）
     generate_parser = subparsers.add_parser('generate', help='自动识别类型生成')
