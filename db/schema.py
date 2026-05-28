@@ -17,6 +17,56 @@ CREATE TABLE IF NOT EXISTS workflow_types (
     created_at      DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
+-- 人物形象配置表
+CREATE TABLE IF NOT EXISTS character_profiles (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    name            TEXT NOT NULL,           -- 配置名称，如"默认亚洲女性"
+    description     TEXT,                    -- 人物描述文本（肤色、体型、五官等）
+    height          TEXT,                    -- 身高体重，如"163cm/49kg"
+    prompt_template TEXT,                    -- 提示词模板，变量占位符 {user_prompt}
+    default_ref_path TEXT,                   -- 默认参考图路径
+    is_default      INTEGER DEFAULT 0,       -- 是否默认（0/1）
+    created_at      DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+-- 需求表（用户提交的需求）
+CREATE TABLE IF NOT EXISTS demands (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    raw_prompt      TEXT NOT NULL,           -- 用户原始需求
+    workflow_type   TEXT,                     -- photo/multiphoto/video（汇总类型）
+    reference_path  TEXT,                     -- 用户提供的参考图路径
+    status          TEXT DEFAULT 'PENDING',  -- PENDING/CONFIRMED/EXECUTING/SUCCESS/FAILED
+    plan_status     TEXT DEFAULT 'PENDING',  -- PENDING/SENT/CONFIRMED/REJECTED
+    total_tasks     INTEGER DEFAULT 0,       -- 任务总数
+    completed_tasks INTEGER DEFAULT 0,       -- 已完成数
+    confirm_token   TEXT,                    -- 确认码（6位随机）
+    confirm_expires_at DATETIME,             -- 确认码过期时间
+    created_at      DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at      DATETIME,
+    confirmed_at    DATETIME,
+    completed_at    DATETIME
+);
+
+-- 需求任务表（一个需求拆解为多个任务）
+CREATE TABLE IF NOT EXISTS demand_tasks (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    demand_id       INTEGER NOT NULL,
+    task_no         INTEGER NOT NULL,        -- 顺序号（1,2,3...）
+    workflow_type   TEXT NOT NULL,           -- photo/multiphoto/video
+    prompt          TEXT,                     -- 组合后最终提示词
+    reference_path  TEXT,                    -- 参考图路径
+    reference_url   TEXT,                    -- 参考图URL（HTTP/RunningHub）
+    task_id         TEXT,                    -- RunningHub task_id
+    status          TEXT DEFAULT 'QUEUED',   -- QUEUED/RUNNING/SUCCESS/FAILED
+    retry_count     INTEGER DEFAULT 0,        -- 已重试次数
+    max_retries     INTEGER DEFAULT 3,       -- 最大重试次数
+    result_data     TEXT,                    -- 结果数据（JSON字符串）
+    created_at      DATETIME DEFAULT CURRENT_TIMESTAMP,
+    completed_at    DATETIME,
+    error_message   TEXT,
+    FOREIGN KEY (demand_id) REFERENCES demands(id)
+);
+
 -- 参考图管理（扩展：来源任务追溯）
 CREATE TABLE IF NOT EXISTS reference_images (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -166,6 +216,12 @@ CREATE INDEX IF NOT EXISTS idx_ref_mapping_ref ON reference_task_mapping(referen
 CREATE INDEX IF NOT EXISTS idx_ref_mapping_task ON reference_task_mapping(task_id);
 CREATE INDEX IF NOT EXISTS idx_task_dep_parent ON task_dependencies(parent_task_id);
 CREATE INDEX IF NOT EXISTS idx_task_dep_child ON task_dependencies(child_task_id);
+CREATE INDEX IF NOT EXISTS idx_demands_status ON demands(status);
+CREATE INDEX IF NOT EXISTS idx_demands_plan_status ON demands(plan_status);
+CREATE INDEX IF NOT EXISTS idx_demands_confirm_token ON demands(confirm_token);
+CREATE INDEX IF NOT EXISTS idx_demand_tasks_demand ON demand_tasks(demand_id);
+CREATE INDEX IF NOT EXISTS idx_demand_tasks_status ON demand_tasks(status);
+CREATE INDEX IF NOT EXISTS idx_character_profile_default ON character_profiles(is_default);
 """
 
 # 初始化数据
@@ -175,6 +231,14 @@ INSERT OR IGNORE INTO workflow_types (code, name, workflow_id) VALUES
     ('photo', '单人照片', '2047002838944980993'),
     ('multiphoto', '多照片套装', '2054941025688399873'),
     ('video', '视频生成', '2048133528671490050');
+
+-- 初始化默认人物形象配置
+INSERT OR IGNORE INTO character_profiles (id, name, description, height, prompt_template, default_ref_path, is_default) VALUES
+    (1, '默认亚洲女性', '中国28岁美女，曼妙身姿，曲线玲珑，凹凸有致，皮肤细腻，精致妆容',
+     '163cm/49kg，三围86/62/86cm，腿长98cm，腰臀比0.72，紧致健身沙漏身材，蜜桃臀，纤细长腿',
+     '{description} {height} {user_prompt}',
+     '/root/.openclaw/workspace-companion2/data/images/avatar.jpg',
+     1);
 """
 
 def get_schema_sql():
