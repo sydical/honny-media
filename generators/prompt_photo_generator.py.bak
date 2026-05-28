@@ -143,7 +143,7 @@ class PromptPhotoGenerator:
             final_paths = []
             
             for i, url in enumerate(urls):
-                index = i  # 从0开始
+                index = i + 1
                 ext = os.path.splitext(url.split('?')[0])[1] or '.jpg'
                 local = os.path.join(session_dir, f"shot_{index}_{timestamp}{ext}")
                 download_file(url, local)
@@ -197,99 +197,55 @@ class PromptPhotoGenerator:
     def _parse_shots(self, prompt):
         """解析分镜提示词
         
-        支持多种格式：
-        1. 格式化格式：分镜1提示词\n内容\n质量层\n\n分镜2提示词\n内容\n...
-        2. 冒号格式：分镜1：内容\n分镜2：内容
-        3. 数字点格式：1. 内容\n2. 内容
-        4. 空行分隔：无标记时按空行分割
-        5. 单段提示词：直接作为整体提示词
-        """
-        if not prompt or not prompt.strip():
-            return []
+        格式化的 prompt 结构：
+        分镜1提示词\n[服装]\n[动作]\n[质量层]\n\n分镜2提示词\n...
         
-        # 质量层说明行（跳过）
+        策略：先用 re.split 分割出各分镜块，再逐块提取内容
+        """
+        marker_pattern = re.compile(
+            r'^(分镜\s*\d+\s*[:：]?\s*|'
+            r'【?分镜\s*\d+】?\s*[:：]?\s*|'
+            r'^分镜\d+提示词$|'
+            r'^\d+\.\s*|'
+            r'^\d+\s*[:：]\s*)',
+            re.IGNORECASE
+        )
+        
         quality_pattern = re.compile(
             r'^(电影级面光|24mm主摄|超级高清|暖调通透|--no|iPhone原生|大师作品|顶级画质|浅景深|柔和光影)'
         )
         
-        # 1. 尝试格式化分割器：分镜N提示词\n 格式
+        # 1. 先按 '分镜N提示词\n' 分割成各分镜块
         blocks = re.split(r'分镜(\d+)提示词\s*\n', prompt)
-        if len(blocks) > 2:
-            # blocks[0]='', blocks[1]='1', blocks[2]=content1, blocks[3]='2', blocks[4]=content2...
-            shots = []
-            i = 1
-            while i < len(blocks) - 1:
-                shot_index = blocks[i]
-                shot_content = blocks[i + 1]
-                lines = [l.strip() for l in shot_content.split('\n') if l.strip()]
-                shot_parts = []
-                for line in lines:
-                    if not line:
-                        continue
-                    if quality_pattern.match(line):
-                        continue
-                    shot_parts.append(line)
-                    if len(shot_parts) >= 2:
-                        break
-                if shot_parts:
-                    shots.append(' '.join(shot_parts))
-                i += 2
-            if shots:
-                return shots
+        # blocks[0] = '' (before first split), blocks[1] = '1', blocks[2] = content1...
+        # pattern: ['', n1, content1, n2, content2, ...]
         
-        # 2. 尝试冒号格式：分镜1：xxx 或 【分镜1】xxx
-        marker_colon = re.compile(
-            r'^(分镜\s*\d+\s*[:：]?\s*|【?分镜\s*\d+】?\s*[:：]?\s*)',
-            re.IGNORECASE
-        )
-        
-        # 3. 尝试数字点格式：1. xxx 或 1：xxx
-        marker_num = re.compile(r'^(\d+)\s*[:：.]\s*')
-        
-        lines = prompt.split('\n')
         shots = []
-        current_shot = []
-        
-        for line in lines:
-            line = line.strip()
-            if not line:
-                # 空行分隔两个分镜
-                if current_shot:
-                    joined = ' '.join(current_shot)
-                    if joined:
-                        shots.append(joined)
-                    current_shot = []
-                continue
+        i = 1
+        while i < len(blocks) - 1:
+            shot_index = blocks[i]  # e.g. '1'
+            shot_content = blocks[i + 1]  # full content block for this shot
             
-            # 跳过质量层
-            if quality_pattern.match(line):
-                continue
+            # 2. 从块中提取各行
+            lines = [l.strip() for l in shot_content.split('\n') if l.strip()]
             
-            # 检测分镜标记
-            is_marker = False
-            if marker_colon.match(line):
-                # 去掉分镜标记前缀
-                line = marker_colon.sub('', line)
-                is_marker = True
-            elif marker_num.match(line):
-                # 去掉数字标记前缀
-                line = marker_num.sub('', line)
-                is_marker = True
+            # 3. 跳过质量层说明行，取前两行 (服装描述 + 动作描述)
+            shot_parts = []
+            for line in lines:
+                # 跳过空行和质量层
+                if not line:
+                    continue
+                if quality_pattern.match(line):
+                    continue
+                shot_parts.append(line)
+                if len(shot_parts) >= 2:
+                    break
             
-            # 如果是新的分镜标记且当前已有内容，保存之前的
-            if is_marker and current_shot:
-                joined = ' '.join(current_shot)
-                if joined:
-                    shots.append(joined)
-                current_shot = []
+            if shot_parts:
+                # 合并为: "[服装描述] [动作描述]"
+                shots.append(' '.join(shot_parts))
             
-            current_shot.append(line)
-        
-        # 保存最后一个分镜
-        if current_shot:
-            joined = ' '.join(current_shot)
-            if joined:
-                shots.append(joined)
+            i += 2
         
         return [s for s in shots if s]
     

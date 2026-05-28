@@ -36,12 +36,17 @@ class PhotoGenerator:
         self.client = RunningHubClient(api_key)
     
     def generate(self, prompt, reference_url, reference_local_path=None, output_dir=None,
-                inject_exif=True, use_template=True, verbose=True, **kwargs):
+                inject_exif=True, use_template=True, verbose=True, async_mode=False, **kwargs):
         """生成单张图片
         
         Args:
             use_template: 是否使用 8 段式模板重组提示词（默认开启）
             verbose: 是否打印格式化后的提示词（默认开启）
+            async_mode: 是否异步模式（只提交不等待），适合长时间任务避免shell超时
+        
+        Returns:
+            async_mode=True时: {'status': 'submitted', 'task_id': str, 'prompt': str}
+            async_mode=False时: {'status': 'success', 'task_id': str, 'local_path': str, ...}
         """
         from core.exif_manager import ExifManager
         from prompts.photo_template import format_prompt
@@ -69,7 +74,7 @@ class PhotoGenerator:
         
         # 检查缓存
         cache = self.db_manager.get_cache(self.WORKFLOW_TYPE, prompt, reference_local_path)
-        if cache:
+        if cache and not async_mode:
             result = self._handle_cache(cache)
             if result:
                 return result
@@ -84,7 +89,19 @@ class PhotoGenerator:
             # 更新缓存
             self.db_manager.update_cache_running(cache_key, task_id)
             
-            # 轮询任务状态
+            print(f"⏳ 任务ID: {task_id}")
+            
+            # 异步模式：只提交不等待，返回task_id
+            if async_mode:
+                return {
+                    'status': 'submitted',
+                    'task_id': task_id,
+                    'workflow_id': self.WORKFLOW_ID,
+                    'prompt': prompt,
+                    'reference_url': reference_url
+                }
+            
+            # 同步模式：轮询任务状态
             print(f"⏳ 任务ID: {task_id}")
             wait_result = self.client.wait_for_task(task_id, max_wait=300)
             

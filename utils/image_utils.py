@@ -157,4 +157,44 @@ def calculate_hash(file_path):
     with open(file_path, 'rb') as f:
         for chunk in iter(lambda: f.read(8192), b''):
             md5.update(chunk)
+
+
+
+def center_crop(image_path, output_path=None, width=720, height=1280):
+    """等比缩放后中心裁切到目标尺寸
+
+    策略：
+    - landscape（更宽）：按高度缩放，center crop 宽度
+    - portrait（更高）：按宽度缩放，center crop 高度
+    - 9:16 比例：scale by width → 刚好覆盖目标尺寸
+
+    Args:
+        image_path: 源图路径
+        output_path: 输出路径（默认覆盖原图）
+        width: 目标宽度
+        height: 目标高度
+    """
+    img = Image.open(image_path)
+    target_ratio = width / height
+    original_ratio = img.width / img.height
+
+    if original_ratio > target_ratio:
+        # landscape/更宽：按高度缩放，裁切多余宽度
+        new_height = height
+        new_width = int(img.width * (height / img.height))
+        img = img.resize((new_width, new_height), Image.LANCZOS)
+        left = (new_width - width) // 2
+        img = img.crop((left, 0, left + width, height))
+    else:
+        # portrait/更高：按宽度缩放，裁切多余高度
+        new_width = width
+        new_height = int(img.height * (width / img.width))
+        img = img.resize((new_width, new_height), Image.LANCZOS)
+        top = (new_height - height) // 2
+        img = img.crop((0, top, width, top + height))
+
+
+    out = output_path or image_path
+    img.save(out, quality=95)
+    return out
     return md5.hexdigest()

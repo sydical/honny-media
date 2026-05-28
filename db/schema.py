@@ -2,8 +2,9 @@
 # -*- coding: utf-8 -*-
 """
 HonnyMedia 数据库表结构定义
-版本：v1.0
-日期：2026-05-18
+版本：v1.1
+日期：2026-05-27
+变更：新增 reference_task_mapping、task_dependencies 表；扩展多表字段以支持追溯、重试、异步模式
 """
 
 SCHEMA_SQL = """
@@ -16,7 +17,7 @@ CREATE TABLE IF NOT EXISTS workflow_types (
     created_at      DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
--- 参考图管理
+-- 参考图管理（扩展：来源任务追溯）
 CREATE TABLE IF NOT EXISTS reference_images (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
     file_path       TEXT NOT NULL,           -- 本地文件路径
@@ -24,16 +25,31 @@ CREATE TABLE IF NOT EXISTS reference_images (
     uploaded_at     DATETIME DEFAULT CURRENT_TIMESTAMP,
     expires_at      DATETIME,                -- URL过期时间
     user_id         TEXT,
-    is_active       INTEGER DEFAULT 1
+    is_active       INTEGER DEFAULT 1,
+    -- 新增字段：来源任务追溯
+    source_task_id  INTEGER,                 -- 该图是哪次生成任务的产物（关联 generation_tasks.id）
+    original_prompt TEXT,                    -- 原始提示词
+    FOREIGN KEY (source_task_id) REFERENCES generation_tasks(id)
 );
 
--- 任务记录（共用）
+-- 参考图 ↔ 生成任务 的映射关系（多对一）
+CREATE TABLE IF NOT EXISTS reference_task_mapping (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    reference_id    INTEGER NOT NULL,        -- 参考图ID (reference_images.id)
+    task_id         INTEGER NOT NULL,        -- 生成该图的任务ID (generation_tasks.id)
+    used_as_ref_for TEXT,                    -- 被谁引用：'photo' / 'multiphoto' / 'video'
+    created_at      DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (reference_id) REFERENCES reference_images(id),
+    FOREIGN KEY (task_id) REFERENCES generation_tasks(id)
+);
+
+-- 任务记录（扩展：重试机制 + 本地路径 + 优化提示词）
 CREATE TABLE IF NOT EXISTS generation_tasks (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
-    task_id         TEXT UNIQUE NOT NULL,    -- RunningHub任务ID
-    workflow_type   TEXT NOT NULL,            -- 'photo' / 'multiphoto' / 'video'
+    task_id         TEXT UNIQUE NOT NULL,    -- RunningHub任务ID（API返回的远程ID）
+    workflow_type   TEXT NOT NULL,           -- 'photo' / 'multiphoto' / 'video'
     prompt          TEXT NOT NULL,
-    optimized_prompt TEXT,
+    optimized_prompt TEXT,                   -- 优化后的分镜提示词（video类型重试时使用）
     reference_id    INTEGER,
     reference_url   TEXT NOT NULL,           -- 参考图URL（冗余存储）
     workflow_id     TEXT,                    -- 具体工作流ID
@@ -42,22 +58,38 @@ CREATE TABLE IF NOT EXISTS generation_tasks (
     started_at      DATETIME,
     completed_at    DATETIME,
     error_message   TEXT,
+    -- 新增字段
+    retry_count     INTEGER DEFAULT 0,       -- 已重试次数
+    max_retries     INTEGER DEFAULT 3,       -- 最大重试次数
+    local_path      TEXT,                    -- 本地路径（冗余存储，方便追溯）
     FOREIGN KEY (workflow_type) REFERENCES workflow_types(code),
     FOREIGN KEY (reference_id) REFERENCES reference_images(id)
+);
+
+-- 任务依赖链（下游等待上游）
+CREATE TABLE IF NOT EXISTS task_dependencies (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    parent_task_id  INTEGER NOT NULL,        -- 上游任务（如 Photo 生成了参考图）
+    child_task_id   INTEGER NOT NULL,        -- 下游任务（如 Video 引用了该图）
+    dependency_type TEXT DEFAULT 'reference_image',
+    reference_ready INTEGER DEFAULT 0,       -- 参考图是否就绪（0=未就绪，1=已就绪）
+    created_at      DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (parent_task_id) REFERENCES generation_tasks(id),
+    FOREIGN KEY (child_task_id) REFERENCES generation_tasks(id)
 );
 
 -- 生成结果（共用）
 CREATE TABLE IF NOT EXISTS generation_results (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
     task_id         INTEGER NOT NULL,
-    result_type     TEXT NOT NULL,            -- 'image' / 'video'
+    result_type     TEXT NOT NULL,           -- 'image' / 'video'
     -- 媒体信息
-    image_url       TEXT,                     -- RunningHub返回URL
-    local_path      TEXT,                     -- 本地保存路径
+    image_url       TEXT,                    -- RunningHub返回URL
+    local_path      TEXT,                    -- 本地保存路径
     width           INTEGER,
     height          INTEGER,
     file_size       INTEGER,
-    duration        INTEGER,                  -- 视频时长(秒)，图片为NULL
+    duration        INTEGER,                 -- 视频时长(秒)，图片为NULL
     -- EXIF信息
     exif_injected   INTEGER DEFAULT 0,
     phone_model     TEXT,
@@ -72,41 +104,47 @@ CREATE TABLE IF NOT EXISTS generation_results (
 CREATE TABLE IF NOT EXISTS multiphoto_sets (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
     task_id         INTEGER NOT NULL,
-    set_name        TEXT,                     -- '卧室纯欲风4宫格'
-    grid_layout     TEXT,                     -- '2x2' / '3x3' / '1x4'
-    total_count     INTEGER,                  -- 图片数量
+    set_name        TEXT,                    -- '卧室纯欲风4宫格'
+    grid_layout     TEXT,                    -- '2x2' / '3x3' / '1x4'
+    total_count     INTEGER,                 -- 图片数量
     created_at      DATETIME DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (task_id) REFERENCES generation_tasks(id)
 );
 
--- 多图套装子项
+-- 多图套装子项（扩展：prompt 追溯）
 CREATE TABLE IF NOT EXISTS multiphoto_items (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
     set_id          INTEGER NOT NULL,
-    index_in_grid   INTEGER,                  -- 0,1,2,3 表示位置
+    index_in_grid   INTEGER,                 -- 0,1,2,3 表示位置
     image_url       TEXT,
     local_path      TEXT,
     width           INTEGER,
     height          INTEGER,
     exif_injected   INTEGER DEFAULT 0,
     shot_at         DATETIME,
-    FOREIGN KEY (set_id) REFERENCES multiphoto_sets(id)
+    -- 新增字段
+    prompt          TEXT,                    -- 该张图的提示词
+    task_id         INTEGER,                -- 关联的任务ID
+    FOREIGN KEY (set_id) REFERENCES multiphoto_sets(id),
+    FOREIGN KEY (task_id) REFERENCES generation_tasks(id)
 );
 
--- 缓存表（共用）
+-- 缓存表（共用，扩展：支持 stale 检测）
 CREATE TABLE IF NOT EXISTS prompt_cache (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
-    prompt_hash     TEXT UNIQUE NOT NULL,    -- MD5(prompt+reference_url)
-    workflow_type   TEXT NOT NULL,            -- 区分类型
+    prompt_hash     TEXT UNIQUE NOT NULL,    -- MD5(prompt+reference_local_path)
+    workflow_type   TEXT NOT NULL,           -- 区分类型
     prompt          TEXT NOT NULL,
-    reference_url   TEXT NOT NULL,
+    reference_url   TEXT,
+    reference_local_path TEXT,               -- 本地路径（参与缓存键）
     status          TEXT DEFAULT 'PENDING',  -- PENDING / RUNNING / SUCCESS / FAILED
-    task_id         TEXT,
+    task_id         TEXT,                    -- RunningHub task_id
     result_id       INTEGER,
     hit_count       INTEGER DEFAULT 0,
     created_at      DATETIME DEFAULT CURRENT_TIMESTAMP,
     updated_at      DATETIME,
     expires_at      DATETIME,                -- 30天后过期
+    stale_checked_at DATETIME,               -- 上次 stale 检查时间
     FOREIGN KEY (workflow_type) REFERENCES workflow_types(code)
 );
 
@@ -114,13 +152,20 @@ CREATE TABLE IF NOT EXISTS prompt_cache (
 CREATE INDEX IF NOT EXISTS idx_tasks_type_status ON generation_tasks(workflow_type, status);
 CREATE INDEX IF NOT EXISTS idx_tasks_created ON generation_tasks(created_at);
 CREATE INDEX IF NOT EXISTS idx_tasks_task_id ON generation_tasks(task_id);
+CREATE INDEX IF NOT EXISTS idx_tasks_status ON generation_tasks(status);
+CREATE INDEX IF NOT EXISTS idx_tasks_started ON generation_tasks(started_at);
 CREATE INDEX IF NOT EXISTS idx_results_local ON generation_results(local_path);
 CREATE INDEX IF NOT EXISTS idx_results_task ON generation_results(task_id);
 CREATE INDEX IF NOT EXISTS idx_cache_type_hash ON prompt_cache(workflow_type, prompt_hash);
 CREATE INDEX IF NOT EXISTS idx_cache_expires ON prompt_cache(expires_at);
+CREATE INDEX IF NOT EXISTS idx_cache_status ON prompt_cache(status);
 CREATE INDEX IF NOT EXISTS idx_multiphoto_task ON multiphoto_sets(task_id);
 CREATE INDEX IF NOT EXISTS idx_multiphoto_items_set ON multiphoto_items(set_id);
 CREATE INDEX IF NOT EXISTS idx_reference_active ON reference_images(is_active);
+CREATE INDEX IF NOT EXISTS idx_ref_mapping_ref ON reference_task_mapping(reference_id);
+CREATE INDEX IF NOT EXISTS idx_ref_mapping_task ON reference_task_mapping(task_id);
+CREATE INDEX IF NOT EXISTS idx_task_dep_parent ON task_dependencies(parent_task_id);
+CREATE INDEX IF NOT EXISTS idx_task_dep_child ON task_dependencies(child_task_id);
 """
 
 # 初始化数据
